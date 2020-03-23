@@ -85,6 +85,12 @@ _state_abbrev = {
 _abbrev_state = {value: key for key, value in _state_abbrev.items()}
 
 
+def _maybe_cumsum(df, doit):
+    if doit:
+        return df.cumsum()
+    return df
+
+
 def _read_data(tspart):
     url = (
         "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/"
@@ -107,6 +113,7 @@ def _read_data(tspart):
         .stack(level='Date')
         .to_frame(tspart)
     )
+
 
 def load_data():
     return pandas.concat(
@@ -139,7 +146,7 @@ def cumulative_plot_global(cumxtab):
             .loc[:, 'Confirmed']
             .pipe(lambda df:
                 df.rename(columns=lambda c: f"{c} ({df.loc[:, c].iloc[-1]:,d})")
-            )   
+            )
     )
 
     outcomes = (
@@ -148,7 +155,7 @@ def cumulative_plot_global(cumxtab):
             .loc[:, ['Deaths', 'Recovered']]
             .pipe(lambda df:
                 df.rename(columns=lambda c: f"Global {c} ({df.loc[:, c].iloc[-1]:,d})")
-            ) 
+            )
     )
 
     fig1, ax1 = pyplot.subplots(figsize=(8, 5), nrows=1, sharex=True)
@@ -203,6 +210,7 @@ def get_us_state_data(data):
             .drop(columns=['Country/Region', 'Subset'])
     )
 
+
 def plot_us_state_data(us_data, state, ax=None, **kwargs):
     return (
         us_data.groupby(by=['State', 'Date'])
@@ -210,18 +218,18 @@ def plot_us_state_data(us_data, state, ax=None, **kwargs):
           .xs(state, level='State')
           .cumsum()
           .loc[lambda df: df['Confirmed'] > 1]
-          .plot.area(ax=ax, **kwargs)  
+          .plot.area(ax=ax, **kwargs)
     )
 
 
-def _state_data(us_data, state, dates):
+def _state_data(us_data, state, dates, cumulative=True):
     start_date, end_date = ('2020-' + d for d in dates)
     return (
         us_data
             .groupby(['State', 'Date'])
             .sum()
             .xs(state, level='State', axis='index')
-            .cumsum()
+            .pipe(_maybe_cumsum, cumulative)
             .loc[start_date:end_date]
             .rename_axis(columns='Metric')
             .stack()
@@ -233,12 +241,12 @@ def _state_data(us_data, state, dates):
     )
 
 
-def _us_data(us_data, dates):
+def _us_data(us_data, dates, cumulative=True):
     start_date, end_date = ('2020-' + d for d in dates)
     return (
         us_data.groupby(by=['Date'])
             .sum()
-            .cumsum()
+            .pipe(_maybe_cumsum, cumulative)
             .loc[start_date:end_date]
             .reset_index()
             .melt(id_vars=['Date'], var_name='Metric', value_name='Cases')
@@ -246,7 +254,7 @@ def _us_data(us_data, dates):
 
 
 def _area_chart(tidy_data):
-    palette = altair.Scale(scheme='category10')   
+    palette = altair.Scale(scheme='category10')
     conf_chart = (
         altair.Chart(tidy_data, width=400, height=175)
             .mark_area()
