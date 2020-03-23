@@ -1,0 +1,10 @@
+entrypoints
+jsonschema
+matplotlib
+numpy
+pandas
+six
+ipython
+jupyter_contrib_nbextensions
+altair>=2.2.0
+jupyterlab>=0.32.0
