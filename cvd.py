@@ -85,7 +85,7 @@ _state_abbrev = {
 _abbrev_state = {value: key for key, value in _state_abbrev.items()}
 
 
-def read_data(tspart):
+def _read_data(tspart):
     url = (
         "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/"
         "csse_covid_19_data/csse_covid_19_time_series/"
@@ -107,6 +107,15 @@ def read_data(tspart):
         .stack(level='Date')
         .to_frame(tspart)
     )
+
+def load_data():
+    return pandas.concat(
+        map(_read_data, ['Confirmed', 'Recovered', 'Deaths']),
+        axis='columns'
+    ).reset_index().assign(Subset=lambda df: numpy.select(
+        (df['Country/Region'].isin(('US', 'Canada')), df['Country/Region'] == 'China'),
+        ('US/Canada', 'China'), 'Everywhere\nElse'
+    ))
 
 
 @pyplot.FuncFormatter
