@@ -2,6 +2,7 @@ import numpy
 from matplotlib import pyplot
 import pandas
 
+import ipywidgets
 import altair
 
 
@@ -85,33 +86,56 @@ _state_abbrev = {
 _abbrev_state = {value: key for key, value in _state_abbrev.items()}
 
 
-def _maybe_cumsum(df, doit):
+def _maybe_cumsum(df, grouplevels, doit):
     if doit:
-        return df.cumsum()
+        return df.groupby(level=grouplevels).cumsum()
     return df
 
 
-def _read_data(tspart):
-    url = (
-        "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/"
-        "csse_covid_19_data/csse_covid_19_time_series/"
-        "time_series_19-covid-{}.csv"
-    ).format(tspart)
-    return (
-        pandas.read_csv(url)
-        .drop(columns=['Lat', 'Long'])
-        .fillna({'Province/State': 'default'})
-        .set_index(['Country/Region', 'Province/State'])
-        .rename(columns=pandas.to_datetime)
-        .sort_index(axis='columns')
-        .pipe(lambda df: df.diff(axis='columns')
-                           .where(lambda x: x.notnull(), df)
-                           .where(lambda x: x >= 0, 0)
+def _maybe_percapita(df, doit):
+    if doit:
+        return (
+            df.divide(_pop_by_country, axis='index', level='Country/Region')
+              .multiply(100000)
         )
-        .rename_axis(columns=['Date'])
-        .astype(int)
-        .stack(level='Date')
-        .to_frame(tspart)
+    else:
+        return df
+
+
+def _global_data(part):
+    url = (
+        "https://raw.githubusercontent.com/CSSEGISandData/"
+        "COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+        "time_series_covid19_{}_global.csv"
+    )
+    return (
+        pandas.read_csv(url.format(part.lower()))
+            .fillna({'Province/State': 'default'})
+            .drop(columns=['Lat', 'Long'])
+            .set_index(['Province/State', 'Country/Region'])
+            .rename(columns=pandas.to_datetime)
+            .rename_axis(columns=['Date'])
+            .stack().to_frame(part.title())
+    )
+
+
+def global_data():
+    return (
+        _global_data('confirmed')
+            .join(_global_data('deaths'))
+            .groupby(level=['Country/Region', 'Date'])
+            .sum()
+            .groupby(level='Country/Region')
+            .apply(
+                lambda g: g.diff()
+                           .where(lambda x: x.notnull(), g)
+                           .where(lambda x: x >= 0, 0) 
+            )
+            .reset_index()
+            .assign(Subset=lambda df: numpy.select(
+                (df['Country/Region'].isin(('US', 'Canada')), df['Country/Region'] == 'China'),
+                ('US/Canada', 'China'), 'Everywhere Else'
+            ))
     )
 
 
@@ -174,10 +198,12 @@ def new_cases_since_nth(data, regioncol, nth, metric='Confirmed', datecol='Date'
     since = (
         data.groupby(by=[regioncol, datecol])
                 .sum()
+            .rename(columns=lambda c: 'New_'+ c)
             .groupby(by=[regioncol])
                 .apply(lambda g: g.assign(
-                    cmlcase=g[metric].cumsum(),
-                    days_since=g[metric].cumsum().ge(nth).cumsum())
+                    Cumulative_Confirmed=g['New_Confirmed'].cumsum(),
+                    Cumulative_Deaths=g['New_Deaths'].cumsum(),
+                    days_since=g['New_' + metric].cumsum().ge(nth).cumsum())
                 )
             .rename_axis(columns='Metric')
             .loc[lambda df: df['days_since'] >= 1]
@@ -254,9 +280,9 @@ def _us_data(us_data, dates, cumulative=True):
 
 
 def _area_chart(tidy_data):
-    palette = altair.Scale(scheme='category10')
+    palette = altair.Scale(scheme='accent')
     conf_chart = (
-        altair.Chart(tidy_data, width=400, height=175)
+        altair.Chart(tidy_data, width=400, height=250)
             .mark_area()
             .encode(
                 x=altair.X('Date', type='temporal'),
@@ -282,4 +308,189 @@ def _area_chart(tidy_data):
             )
     )
 
-    return (conf_chart + outcome_chart).configure_mark(opacity=0.875)
+    return (conf_chart + outcome_chart)
+
+
+def us_chart(us_data):
+    dates = us_data['Date'].unique()
+    options = [pandas.Timestamp(d).strftime('%m/%d') for d in dates]
+    df = ipywidgets.fixed(us_data)
+    state_dropdown = ipywidgets.Dropdown(
+        options=_state_abbrev.items(),
+        value='US',
+        description='Pick a State:',
+        disabled=False
+    )
+    date_slider = ipywidgets.SelectionRangeSlider(
+        index=(0, len(dates)-1),
+        options=options,
+        description='Dates',
+        disabled=False,
+        layout=ipywidgets.Layout(width='500px'),
+        continuous_update=False
+    )
+    cumulative_toggle = ipywidgets.RadioButtons(
+        options=['Cumulative', 'NEW'],
+        description='Cumulative or NEW?',
+        disabled=False
+    )
+
+    def chart(us_data, state, cumulative, dates):
+        _doit = cumulative.lower() == 'cumulative'
+        if state == 'US':
+            data = _us_data(us_data, dates, _doit)
+        else:
+            data = _state_data(us_data, state, dates, _doit)
+        return _area_chart(data)
+
+    return ipywidgets.interact(
+        chart,
+        us_data=df,
+        state=state_dropdown,
+        cumulative=cumulative_toggle,
+        dates=date_slider
+    )
+
+
+def _global_ts_chart(data, how, dates):
+    start, end = [pandas.Timestamp('2020-' + d) for d in dates]
+    _data = (
+        data.groupby(by=['Subset', 'Date'],)
+            .sum()
+            .pipe(_maybe_cumsum, 'Subset', (how.lower() == 'cumulative'))
+            .unstack(level='Subset')
+            .loc[start:end]
+            .stack(level='Subset')
+    )
+
+    colors_scale = altair.Scale(
+        domain=['China', 'US/Canada', 'Everywhere Else', 'Global Deaths'],
+        range=['Crimson', 'SteelBlue', 'SaddleBrown', 'DimGrey']
+    )
+
+    conf = (
+        _data.reset_index()
+            .pipe(altair.Chart, width=400, height=250)
+            .mark_area()
+            .encode(
+                x=altair.X('Date', type='temporal'),
+                y=altair.Y('Confirmed', type='quantitative', stack=True),
+                color=altair.Color('Subset', scale=colors_scale),
+                order=altair.Order('Subset', sort='ascending'),
+            )
+    )
+
+    dead = (
+        _data.groupby(level='Date').sum()
+            .reset_index()
+            .assign(Subset='Global Deaths')
+            .pipe(altair.Chart, width=400, height=250)
+            .mark_area()
+            .encode(
+                x=altair.X('Date', type='temporal'),
+                y=altair.Y('Deaths', type='quantitative', stack=True),
+                color=altair.Color('Subset', scale=colors_scale),
+            )
+    )
+    
+    return (conf + dead)
+
+
+def global_ts_chart(data):
+    dates = data['Date'].unique()
+    options = [pandas.Timestamp(d).strftime('%m/%d') for d in dates]
+    df = ipywidgets.fixed(data)
+    date_slider = ipywidgets.SelectionRangeSlider(
+        index=(0, len(dates)-1),
+        options=options,
+        description='Dates',
+        disabled=False,
+        layout=ipywidgets.Layout(width='500px'),
+        continuous_update=False
+    )
+    cumulative_toggle = ipywidgets.RadioButtons(
+        options=['Cumulative', 'NEW'],
+        description='How?',
+        disabled=False
+    )
+
+    return ipywidgets.interact(
+        _global_ts_chart,
+        data=df,
+        how=cumulative_toggle,
+        dates=date_slider
+    )
+
+
+def _new_cases_chart(data, how, which, N, percapita):
+    countries = (
+        data.groupby('Country/Region')
+            ['Confirmed']
+            .sum()
+            .sort_values(ascending=False)
+            .head(N)
+            .index.tolist()
+    )
+
+    if N <= 10:
+        palette = altair.Scale(scheme='category10')
+    else:
+        palette = altair.Scale(scheme='category20')
+
+    return (
+        data.loc[data['Country/Region'].isin(countries)]
+            .pipe(new_cases_since_nth, 'Country/Region', 100)
+            .pipe(_maybe_percapita, percapita)
+            .reset_index()
+            .pipe(altair.Chart, width=400, height=250)
+            .mark_line()
+            .encode(
+                x=altair.X('days_since', type='quantitative'),
+                y=altair.Y(how.title() + '_' + which.title(), type='quantitative'),
+                color=altair.Color('Country/Region', scale=palette)
+            )
+    )
+
+
+def new_cases_chart(data):
+    df = ipywidgets.fixed(data)
+    how_toggle = ipywidgets.RadioButtons(
+        options=['Cumulative', 'NEW'],
+        description='How?',
+        disabled=False
+    )
+    which_toggle = ipywidgets.RadioButtons(
+        options=['Confirmed', 'Deaths'],
+        description='Which?',
+        disabled=False,
+        orientation='horizontal'
+    )
+
+    N_slider = ipywidgets.IntSlider(
+        value=10,
+        min=4,
+        max=20,
+        step=1,
+        description='Top N:',
+        disabled=False,
+        continuous_update=False,
+        orientation='horizontal',
+        readout=True,
+        readout_format='d'
+    )
+
+    percap_toggle = ipywidgets.RadioButtons(
+        options=[True, False],
+        description='Per 100k?',
+        disabled=False,
+        orientation='horizontal'
+    )
+
+    return ipywidgets.interact(
+        _new_cases_chart,
+        data=df,
+        how=how_toggle,
+        which=which_toggle,
+        N=N_slider,
+        percapita=percap_toggle
+    )
