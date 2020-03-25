@@ -1,2 +1,4 @@
 *.png
-*scrach*
+*scratch*
+.ipynb_checkpoints
+__pycache__
