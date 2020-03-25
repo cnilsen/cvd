@@ -8,3 +8,4 @@ ipython
 jupyter_contrib_nbextensions
 altair
 jupyterlab
+appmode

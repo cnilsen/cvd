@@ -129,7 +129,7 @@ def global_data():
             .apply(
                 lambda g: g.diff()
                            .where(lambda x: x.notnull(), g)
-                           .where(lambda x: x >= 0, 0) 
+                           .where(lambda x: x >= 0, 0)
             )
             .reset_index()
             .assign(Subset=lambda df: numpy.select(
@@ -392,7 +392,7 @@ def _global_ts_chart(data, how, dates):
                 color=altair.Color('Subset', scale=colors_scale),
             )
     )
-    
+
     return (conf + dead)
 
 
@@ -422,7 +422,7 @@ def global_ts_chart(data):
     )
 
 
-def _new_cases_chart(data, how, which, N, percapita):
+def _new_cases_chart(data, how, which, percapita, N):
     countries = (
         data.groupby('Country/Region')
             ['Confirmed']
@@ -491,6 +491,6 @@ def new_cases_chart(data):
         data=df,
         how=how_toggle,
         which=which_toggle,
+        percapita=percap_toggle,
         N=N_slider,
-        percapita=percap_toggle
     )
