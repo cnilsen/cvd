@@ -95,7 +95,7 @@ def _maybe_cumsum(df, grouplevels, doit):
 def _maybe_percapita(df, doit):
     if doit:
         return (
-            df.divide(_pop_by_country, axis='index', level='Country/Region')
+            df.divide(_pop_by_country, axis='index', level='Country')
               .multiply(100000)
         )
     else:
@@ -119,27 +119,43 @@ def _global_data(part):
     )
 
 
+def _unaccumulate(df, level):
+    return (
+        df.groupby(level=level)
+          .apply(
+              lambda g: g.diff()
+                         .where(lambda x: x.notnull(), g)
+                         .where(lambda x: x >= 0, 0)
+          )
+    )
+
+
+def _break_out_region(df, regioncol, default, *regions):
+    return (
+        pandas.concat([
+            df.loc[df[regioncol].isin(regions)].assign(Subset=df[regioncol]),
+            df.assign(Subset=default)
+        ], sort=False, ignore_index=True)
+        .groupby(by=['Date', 'Subset'])
+        .sum()
+        .fillna(0).astype(int)
+        .sort_index()
+    )
+
+
 def global_data():
     return (
         _global_data('confirmed')
             .join(_global_data('deaths'))
             .groupby(level=['Country/Region', 'Date'])
             .sum()
-            .groupby(level='Country/Region')
-            .apply(
-                lambda g: g.diff()
-                           .where(lambda x: x.notnull(), g)
-                           .where(lambda x: x >= 0, 0)
-            )
+            .pipe(_unaccumulate, level='Country/Region')
             .reset_index()
-            .assign(Subset=lambda df: numpy.select(
-                (df['Country/Region'].isin(('US', 'Canada')), df['Country/Region'] == 'China'),
-                ('US/Canada', 'China'), 'Everywhere Else'
-            ))
+            .rename(columns={'Country/Region': 'Country'})
     )
 
 
-def us_data():
+def state_data():
     url = (
         "https://raw.githubusercontent.com/"
         "nytimes/covid-19-data/master/us-states.csv"
@@ -148,7 +164,14 @@ def us_data():
         pandas.read_csv(url, parse_dates=['date'])
             .rename(columns=str.title)
             .rename(columns={'Cases': 'Confirmed'})
+            .drop(columns=['Fips'])
+            .set_index(['Date', 'State'])
+            .sort_index()
+            .pipe(_unaccumulate, level='State')
+            .astype(int)
+            .reset_index()
     )
+
 
 def load_data():
     return pandas.concat(
@@ -435,7 +458,7 @@ def global_ts_chart(data):
 
 def _new_cases_chart(data, how, which, percapita, N):
     countries = (
-        data.groupby('Country/Region')
+        data.groupby('Country')
             ['Confirmed']
             .sum()
             .sort_values(ascending=False)
@@ -449,8 +472,8 @@ def _new_cases_chart(data, how, which, percapita, N):
         palette = altair.Scale(scheme='category20')
 
     return (
-        data.loc[data['Country/Region'].isin(countries)]
-            .pipe(new_cases_since_nth, 'Country/Region', 100)
+        data.loc[data['Country'].isin(countries)]
+            .pipe(new_cases_since_nth, 'Country', 100)
             .pipe(_maybe_percapita, percapita)
             .reset_index()
             .pipe(altair.Chart, width=400, height=250)
@@ -458,7 +481,7 @@ def _new_cases_chart(data, how, which, percapita, N):
             .encode(
                 x=altair.X('days_since', type='quantitative'),
                 y=altair.Y(how.title() + '_' + which.title(), type='quantitative'),
-                color=altair.Color('Country/Region', scale=palette)
+                color=altair.Color('Country', scale=palette)
             )
     )
 
@@ -504,4 +527,129 @@ def new_cases_chart(data):
         which=which_toggle,
         percapita=percap_toggle,
         N=N_slider,
+    )
+
+
+def _break_out_chart(data, cumulative, regioncol, default, regions, dates):
+    start, end = [pandas.Timestamp('2020-' + d) for d in dates]
+    df = (
+        data
+        .pipe(_break_out_region, regioncol, default, *regions)
+        .pipe(_maybe_cumsum, ['Subset'], cumulative != 'NEW')
+        .loc[(slice(start, end), slice(None))]
+        .reset_index()
+    )
+
+    whole = (
+        altair.Chart(df)
+            .properties(width=500, height=300)
+            .mark_area()
+            .encode(
+                x=altair.X('Date', type='temporal'),
+                y=altair.Y('Confirmed', type='quantitative', stack=True),
+                color=altair.value("lightgrey")
+            )
+            .transform_filter(altair.datum.Subset == default)
+    )
+
+    parts = (
+        altair.Chart(df)
+            .properties(width=500, height=300)
+            .mark_area()
+            .encode(
+               x=altair.X('Date', type='temporal'),
+               y=altair.Y('Confirmed', type='quantitative', stack=True),
+               color=altair.Color('Subset', type='nominal'),
+            )
+            .transform_filter(altair.datum.Subset != default)
+    )
+
+    return whole + parts
+
+
+def break_out_US(data):
+    dates = data['Date'].unique()
+    options = [pandas.Timestamp(d).strftime('%m/%d') for d in dates]
+    date_slider = ipywidgets.SelectionRangeSlider(
+        index=(0, len(dates)-1),
+        options=options,
+        description='Dates',
+        disabled=False,
+        layout=ipywidgets.Layout(width='400px'),
+        continuous_update=False
+    )
+    cumulative_toggle = ipywidgets.RadioButtons(
+        options=['Cumulative', 'NEW'],
+        description='How?',
+        disabled=False
+    )
+
+    _states = (
+        data.groupby(['State'])
+            ['Confirmed'].sum()
+            .sort_values(ascending=False)
+            .index.to_list()
+    )
+    _highlights = ['Oregon', 'Washington']
+    states = [*_highlights, *[s for s in _states if s not in _highlights]]
+    region_selector = ipywidgets.SelectMultiple(
+        options=states,
+        value=_highlights,
+        rows=10,
+        description='States',
+        disabled=False
+    )
+
+    return ipywidgets.interact(
+        _break_out_chart,
+        data=ipywidgets.fixed(data),
+        cumulative=cumulative_toggle,
+        regioncol=ipywidgets.fixed('State'),
+        default=ipywidgets.fixed('US'),
+        regions=region_selector,
+        dates=date_slider
+    )
+
+
+def break_out_world(data):
+    dates = data['Date'].unique()
+    options = [pandas.Timestamp(d).strftime('%m/%d') for d in dates]
+    date_slider = ipywidgets.SelectionRangeSlider(
+        index=(0, len(dates)-1),
+        options=options,
+        description='Dates',
+        disabled=False,
+        layout=ipywidgets.Layout(width='400px'),
+        continuous_update=False
+    )
+    cumulative_toggle = ipywidgets.RadioButtons(
+        options=['Cumulative', 'NEW'],
+        description='How?',
+        disabled=False
+    )
+
+    _countries = (
+        data.groupby(['Country'])
+            ['Confirmed'].sum()
+            .sort_values(ascending=False)
+            .index.to_list()
+    )
+    _highlights = ['US', 'Italy', 'Spain']
+    countries = [*_highlights, *[s for s in _countries if s not in _highlights]]
+    region_selector = ipywidgets.SelectMultiple(
+        options=countries,
+        value=_highlights,
+        rows=10,
+        description='Countries',
+        disabled=False
+    )
+
+    return ipywidgets.interact(
+        _break_out_chart,
+        data=ipywidgets.fixed(data),
+        cumulative=cumulative_toggle,
+        regioncol=ipywidgets.fixed('Country'),
+        default=ipywidgets.fixed('World'),
+        regions=region_selector,
+        dates=date_slider
     )
