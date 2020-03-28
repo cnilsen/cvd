@@ -139,6 +139,17 @@ def global_data():
     )
 
 
+def us_data():
+    url = (
+        "https://raw.githubusercontent.com/"
+        "nytimes/covid-19-data/master/us-states.csv"
+    )
+    return (
+        pandas.read_csv(url, parse_dates=['date'])
+            .rename(columns=str.title)
+            .rename(columns={'Cases': 'Confirmed'})
+    )
+
 def load_data():
     return pandas.concat(
         map(_read_data, ['Confirmed', 'Recovered', 'Deaths']),
@@ -157,11 +168,11 @@ def yaxisfmt(tick, pos):
 
 def cumulative_xtab(data, regioncol, datecol='Date'):
     return (
-    data.groupby(by=[regioncol, datecol]).sum()
-        .unstack(level=regioncol)
-        .cumsum()
-        .rename_axis(columns=['Metric', regioncol])
-)
+        data.groupby(by=[regioncol, datecol]).sum()
+            .unstack(level=regioncol)
+            .cumsum()
+            .rename_axis(columns=['Metric', regioncol])
+    )
 
 
 def cumulative_plot_global(cumxtab):
