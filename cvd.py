@@ -179,6 +179,16 @@ def _make_region_selector(data, regioncol, *highlights):
     )
 
 
+def _make_yscale_toggle():
+    return ipywidgets.ToggleButtons(
+        options=['Linear', 'Log'],
+        description='Y-scale',
+        disabled=False,
+        button_style='',
+        tooltips=['Linear scale', 'log (base 10) scale']
+    )
+
+
 def _maybe_cumsum(df, grouplevels, doit):
     if doit:
         return df.groupby(level=grouplevels).cumsum()
@@ -297,7 +307,7 @@ def days_until_nth_accumulation(since, regioncol, nth, accumcol='cmlcase'):
     )
 
 
-def _new_cases_chart(data, how, which, percapita, N, regioncol):
+def _new_cases_chart(data, how, which, percapita, yscale, N, regioncol):
     countries = (
         data.groupby(regioncol)
             ['Confirmed']
@@ -306,6 +316,8 @@ def _new_cases_chart(data, how, which, percapita, N, regioncol):
             .head(N)
             .index.tolist()
     )
+
+    _yscale = altair.Scale(type=yscale.lower()) 
 
     if N <= 10:
         palette = altair.Scale(scheme='category10')
@@ -321,7 +333,11 @@ def _new_cases_chart(data, how, which, percapita, N, regioncol):
             .mark_line()
             .encode(
                 x=altair.X('days_since', type='quantitative'),
-                y=altair.Y(how.title() + '_' + which.title(), type='quantitative'),
+                y=altair.Y(
+                    how.title() + '_' + which.title(),
+                    type='quantitative',
+                    scale=_yscale
+                ),
                 color=altair.Color(regioncol, scale=palette)
             )
     )
@@ -366,6 +382,7 @@ def new_cases_chart(data, regioncol):
         how=_make_cumulative_toggle(),
         which=which_toggle,
         percapita=percap_toggle,
+        yscale=_make_yscale_toggle(),
         N=N_slider,
         regioncol=ipywidgets.fixed(regioncol)
     )
