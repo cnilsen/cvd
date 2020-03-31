@@ -307,6 +307,11 @@ def _new_cases_chart(data, how, which, percapita, N, regioncol):
             .index.tolist()
     )
 
+    if how.lower() != 'new':
+        yscale = altair.Scale(type='log') 
+    else:
+        yscale = altair.Scale(type='linear') 
+
     if N <= 10:
         palette = altair.Scale(scheme='category10')
     else:
@@ -321,7 +326,11 @@ def _new_cases_chart(data, how, which, percapita, N, regioncol):
             .mark_line()
             .encode(
                 x=altair.X('days_since', type='quantitative'),
-                y=altair.Y(how.title() + '_' + which.title(), type='quantitative'),
+                y=altair.Y(
+                    how.title() + '_' + which.title(),
+                    type='quantitative',
+                    scale=yscale
+                ),
                 color=altair.Color(regioncol, scale=palette)
             )
     )
